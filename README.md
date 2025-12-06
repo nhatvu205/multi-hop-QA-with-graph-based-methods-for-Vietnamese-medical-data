@@ -1,5 +1,5 @@
-# Project Title
-MULTI-HOP QA WITH GRAPH-BASED METHODS FOR VIETNAMESE MEDICAL DOMAIN 
+# Project Name: MULTI-HOP QA WITH GRAPH-BASED METHODS FOR VIETNAMESE MEDICAL DOMAIN 
+
 ## Description
 This is a final project for the coursework DS201 "Deep Learning in Data Science" of University of Information Technology - VNU. The project aims at solving the problem of low-resource multi-hop dataset in Vietnamese medical domain, then developing a QA system with graph-based methods such as GNNs for further application. This project is expected to be completed in 4 months since Feburary 2026.
 ## Installation
