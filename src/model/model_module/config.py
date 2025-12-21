@@ -54,7 +54,7 @@ class Config:
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
         self.grad_clip_norm = 1.0
-        self.max_seq_len = 384  # Keep at 512 for optimal output
+        self.max_seq_len = 512  # Keep at 512 for optimal output
         
         # Memory optimization settings
         self.use_mixed_precision = True  # Use FP16/BF16 to reduce memory by ~50%
