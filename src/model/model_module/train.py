@@ -2,13 +2,16 @@
 
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast, GradScaler
 from tqdm import tqdm
 from .metrics import compute_accuracy, compute_perplexity, evaluate_qa_metrics
 
 
-def train_epoch(model, dataloader, criterion, optimizer, device, use_kg=True):
+def train_epoch(model, dataloader, criterion, optimizer, device, use_kg=True, 
+                use_mixed_precision=False, gradient_accumulation_steps=1, 
+                clear_cache_every_n_batches=5, scaler=None):
     """
-    Train for one epoch
+    Train for one epoch with memory optimizations
     
     Args:
         model: KGEnhancedTransformer
@@ -17,6 +20,10 @@ def train_epoch(model, dataloader, criterion, optimizer, device, use_kg=True):
         optimizer: Optimizer
         device: torch.device
         use_kg: Whether to use KG enhancement
+        use_mixed_precision: Use FP16/BF16 mixed precision
+        gradient_accumulation_steps: Number of steps to accumulate gradients
+        clear_cache_every_n_batches: Clear GPU cache every N batches
+        scaler: GradScaler for mixed precision (required if use_mixed_precision=True)
     
     Returns:
         tuple: (avg_loss, avg_accuracy)
@@ -27,28 +34,46 @@ def train_epoch(model, dataloader, criterion, optimizer, device, use_kg=True):
     total_tokens = 0
     
     progress_bar = tqdm(dataloader, desc='Training', leave=False, ncols=100)
-    for batch in progress_bar:
-        question_ids = batch['question_ids'].to(device)
-        context_ids = batch['context_ids'].to(device)
-        answer_ids = batch['answer_ids'].to(device)
+    
+    for batch_idx, batch in enumerate(progress_bar):
+        question_ids = batch['question_ids'].to(device, non_blocking=True)
+        context_ids = batch['context_ids'].to(device, non_blocking=True)
+        answer_ids = batch['answer_ids'].to(device, non_blocking=True)
         
         # KG data (may be dummy if use_kg=False)
-        kg_node_features = batch['kg_node_features'].to(device) if use_kg else None
-        kg_edge_index = [edge_idx.to(device) for edge_idx in batch['kg_edge_index']] if use_kg else None
+        kg_node_features = batch['kg_node_features'].to(device, non_blocking=True) if use_kg else None
+        kg_edge_index = [edge_idx.to(device, non_blocking=True) for edge_idx in batch['kg_edge_index']] if use_kg else None
         
-        optimizer.zero_grad()
+        # Zero gradients only at the start of accumulation
+        if (batch_idx + 1) % gradient_accumulation_steps == 1:
+            optimizer.zero_grad()
         
-        # Forward pass
-        outputs = model(
-            question_ids=question_ids,
-            context_ids=context_ids,
-            answer_ids=answer_ids,  # Teacher forcing
-            kg_node_features=kg_node_features,
-            kg_edge_index=kg_edge_index
-        )
-        
-        # Compute loss (outputs: batch, seq_len, vocab_size)
-        loss = criterion(outputs.reshape(-1, outputs.size(-1)), answer_ids.reshape(-1))
+        # Forward pass with mixed precision if enabled
+        if use_mixed_precision and scaler is not None:
+            with autocast():
+                outputs = model(
+                    question_ids=question_ids,
+                    context_ids=context_ids,
+                    answer_ids=answer_ids,  # Teacher forcing
+                    kg_node_features=kg_node_features,
+                    kg_edge_index=kg_edge_index
+                )
+                # Compute loss (outputs: batch, seq_len, vocab_size)
+                loss = criterion(outputs.reshape(-1, outputs.size(-1)), answer_ids.reshape(-1))
+                # Scale loss for gradient accumulation
+                loss = loss / gradient_accumulation_steps
+        else:
+            outputs = model(
+                question_ids=question_ids,
+                context_ids=context_ids,
+                answer_ids=answer_ids,  # Teacher forcing
+                kg_node_features=kg_node_features,
+                kg_edge_index=kg_edge_index
+            )
+            # Compute loss (outputs: batch, seq_len, vocab_size)
+            loss = criterion(outputs.reshape(-1, outputs.size(-1)), answer_ids.reshape(-1))
+            # Scale loss for gradient accumulation
+            loss = loss / gradient_accumulation_steps
         
         # Compute accuracy
         predictions = torch.argmax(outputs, dim=-1)
@@ -57,17 +82,46 @@ def train_epoch(model, dataloader, criterion, optimizer, device, use_kg=True):
         total_correct += correct
         total_tokens += mask.sum().item()
         
-        # Backward pass
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        # Backward pass with mixed precision if enabled
+        if use_mixed_precision and scaler is not None:
+            scaler.scale(loss).backward()
+        else:
+            loss.backward()
         
-        total_loss += loss.item()
+        # Step optimizer only after accumulating gradients
+        if (batch_idx + 1) % gradient_accumulation_steps == 0:
+            if use_mixed_precision and scaler is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+        
+        # Accumulate loss (multiply back to get original scale)
+        total_loss += loss.item() * gradient_accumulation_steps
+        
         acc = 100 * correct / mask.sum().item() if mask.sum().item() > 0 else 0
-        progress_bar.set_postfix({'loss': f'{loss.item():.4f}', 'acc': f'{acc:.2f}%'})
+        progress_bar.set_postfix({'loss': f'{loss.item() * gradient_accumulation_steps:.4f}', 'acc': f'{acc:.2f}%'})
+        
+        # Explicitly delete tensors to free memory
+        del outputs, loss, predictions, mask, question_ids, context_ids, answer_ids
+        if kg_node_features is not None:
+            del kg_node_features
+        if kg_edge_index is not None:
+            del kg_edge_index
+        
+        # Clear GPU cache periodically to prevent OOM
+        if torch.cuda.is_available() and (batch_idx + 1) % clear_cache_every_n_batches == 0:
+            torch.cuda.empty_cache()
     
     avg_loss = total_loss / len(dataloader)
     avg_acc = 100 * total_correct / total_tokens if total_tokens > 0 else 0
+    
+    # Final cache clear
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     return avg_loss, avg_acc
 
@@ -97,8 +151,8 @@ def evaluate(model, dataloader, criterion, device, use_kg=True):
             context_ids = batch['context_ids'].to(device)
             answer_ids = batch['answer_ids'].to(device)
             
-            kg_node_features = batch['kg_node_features'].to(device) if use_kg else None
-            kg_edge_index = [edge_idx.to(device) for edge_idx in batch['kg_edge_index']] if use_kg else None
+            kg_node_features = batch['kg_node_features'].to(device, non_blocking=True) if use_kg else None
+            kg_edge_index = [edge_idx.to(device, non_blocking=True) for edge_idx in batch['kg_edge_index']] if use_kg else None
             
             outputs = model(
                 question_ids=question_ids,
@@ -117,9 +171,20 @@ def evaluate(model, dataloader, criterion, device, use_kg=True):
             correct = ((predictions == answer_ids) & mask).sum().item()
             total_correct += correct
             total_tokens += mask.sum().item()
+            
+            # Explicitly delete tensors to free memory
+            del outputs, loss, predictions, mask, question_ids, context_ids, answer_ids
+            if kg_node_features is not None:
+                del kg_node_features
+            if kg_edge_index is not None:
+                del kg_edge_index
     
     avg_loss = total_loss / len(dataloader)
     avg_acc = 100 * total_correct / total_tokens if total_tokens > 0 else 0
+    
+    # Clear cache after evaluation
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     
     return avg_loss, avg_acc
 
@@ -210,6 +275,28 @@ def train_model(model, train_loader, val_loader, val_qa_samples, tokenizer, conf
     model = model.to(device)
     use_kg = config.use_kg
     
+    # Clear GPU cache before training
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
+    # Enable gradient checkpointing if available (saves memory)
+    use_gradient_checkpointing = getattr(config, 'use_gradient_checkpointing', False)
+    if use_gradient_checkpointing and hasattr(model, 't5_model'):
+        if hasattr(model.t5_model, 'gradient_checkpointing_enable'):
+            model.t5_model.gradient_checkpointing_enable()
+            tqdm.write('✓ Gradient checkpointing enabled (saves memory, slower training)')
+    
+    # Mixed precision training setup
+    use_mixed_precision = getattr(config, 'use_mixed_precision', False)
+    scaler = None
+    if use_mixed_precision and torch.cuda.is_available():
+        scaler = GradScaler()
+        tqdm.write('✓ Mixed precision training enabled (FP16/BF16)')
+    
+    # Gradient accumulation steps
+    gradient_accumulation_steps = getattr(config, 'gradient_accumulation_steps', 1)
+    clear_cache_every_n_batches = getattr(config, 'clear_cache_every_n_batches', 5)
+    
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss(ignore_index=0)  # PAD token
     optimizer = torch.optim.AdamW(
@@ -242,6 +329,13 @@ def train_model(model, train_loader, val_loader, val_qa_samples, tokenizer, conf
     tqdm.write(f'\n{"="*70}')
     tqdm.write(f'Starting training for {config.num_epochs} epochs...')
     tqdm.write(f'Mode: {"KG-Enhanced" if use_kg else "Transformer-only"}')
+    tqdm.write(f'Batch size: {config.batch_size}, Gradient accumulation: {gradient_accumulation_steps} steps')
+    tqdm.write(f'Effective batch size: {config.batch_size * gradient_accumulation_steps}')
+    tqdm.write(f'Max sequence length: {config.max_seq_len}')
+    if use_mixed_precision:
+        tqdm.write(f'Mixed precision: Enabled (FP16/BF16)')
+    if use_gradient_checkpointing:
+        tqdm.write(f'Gradient checkpointing: Enabled')
     if hasattr(config, 'early_stopping_patience') and config.early_stopping_patience > 0:
         tqdm.write(f'Early stopping: patience={config.early_stopping_patience}, min_delta={getattr(config, "early_stopping_min_delta", 0.0001)}')
     tqdm.write(f'{"="*70}')
@@ -252,7 +346,13 @@ def train_model(model, train_loader, val_loader, val_qa_samples, tokenizer, conf
         tqdm.write(f'{"="*70}')
         
         # Train
-        train_loss, train_acc = train_epoch(model, train_loader, criterion, optimizer, device, use_kg)
+        train_loss, train_acc = train_epoch(
+            model, train_loader, criterion, optimizer, device, use_kg,
+            use_mixed_precision=use_mixed_precision,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            clear_cache_every_n_batches=clear_cache_every_n_batches,
+            scaler=scaler
+        )
         train_ppl = compute_perplexity(train_loss)
         
         history['train_loss'].append(train_loss)
@@ -330,15 +430,47 @@ def train_model(model, train_loader, val_loader, val_qa_samples, tokenizer, conf
             early_stopping_counter = 0
             # Only save model if use_kg = True
             if use_kg:
+                # Prepare config dict for easy loading (especially for HuggingFace Space)
+                config_dict = {
+                    'use_kg': config.use_kg,
+                    'vit5_model_name': config.vit5_model_name,
+                    'vit5_tokenizer_model': config.vit5_tokenizer_model,
+                    'kg_emb_dim': config.kg_emb_dim,
+                    'gnn_hidden': config.gnn_hidden,
+                    'gnn_type': config.gnn_type,
+                    'gnn_layers': config.gnn_layers,
+                    'dropout': config.dropout,
+                    'max_seq_len': config.max_seq_len,
+                    'tokenizer_type': config.tokenizer_type,
+                }
+                
+                # Save best model with all necessary info for HuggingFace deployment
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'val_loss': val_loss,
-                    'config': config,
+                    'config': config,  # Full config object (for backward compatibility)
+                    'config_dict': config_dict,  # Dict version (easier to load on HuggingFace)
+                    'use_kg': config.use_kg,  # Explicit flag for easy detection
+                    'tokenizer_info': {
+                        'model_name': config.vit5_tokenizer_model,
+                        'max_len': config.max_seq_len,
+                        'type': config.tokenizer_type
+                    },
+                    'model_architecture': {
+                        'vit5_model_name': config.vit5_model_name,
+                        'kg_node_features': config.kg_emb_dim,
+                        'gnn_hidden': config.gnn_hidden,
+                        'gnn_type': config.gnn_type,
+                        'gnn_layers': config.gnn_layers,
+                        'dropout': config.dropout,
+                    },
                     'history': history
                 }, config.best_model_path)
                 tqdm.write(f'\n✓ Best model saved! (val_loss: {val_loss:.4f}, epoch: {best_epoch})')
+                tqdm.write(f'  Saved to: {config.best_model_path}')
+                tqdm.write(f'  Includes: model weights, config, tokenizer info, architecture params')
             else:
                 tqdm.write(f'\n✓ Best model found! (val_loss: {val_loss:.4f}, epoch: {best_epoch}) [Not saved: use_kg=False]')
         else:
