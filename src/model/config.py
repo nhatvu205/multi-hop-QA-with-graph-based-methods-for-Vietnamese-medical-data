@@ -23,7 +23,7 @@ class Config:
         # Tokenizer settings
         self.tokenizer_type = 'vit5'  # Using ViT5 tokenizer
         self.vocab_size = None  # Will be auto-detected from ViT5 tokenizer
-        self.max_seq_len = 128
+        self.max_seq_len = 512
         
         # ViT5 Tokenizer settings
         self.vit5_tokenizer_model = 'VietAI/vit5-base'  # ViT5 tokenizer model name
