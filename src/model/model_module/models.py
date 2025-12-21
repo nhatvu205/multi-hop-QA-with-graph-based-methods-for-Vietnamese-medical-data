@@ -150,9 +150,13 @@ class KGEnhancedViT5(nn.Module):
         self.use_kg = use_kg
         self.d_model = None  # Will be set from T5 config
         
-        # Load pre-trained ViT5 model
+        # Load pre-trained ViT5 model with memory-efficient settings
         print(f"Loading pre-trained ViT5: {vit5_model_name}")
-        self.t5_model = T5ForConditionalGeneration.from_pretrained(vit5_model_name)
+        self.t5_model = T5ForConditionalGeneration.from_pretrained(
+            vit5_model_name,
+            low_cpu_mem_usage=True,  # Reduce CPU memory usage during loading
+            torch_dtype=torch.float32  # Use float32 to save memory (can use float16 if needed)
+        )
         
         # Get model dimensions from T5 config
         t5_config = self.t5_model.config

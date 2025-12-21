@@ -123,10 +123,34 @@ def main(mode='train', use_kg=None):
     val_dataset = KGQADataset(val_qa, medical_kg, tokenizer, config.kg_emb_dim, use_kg=config.use_kg)
     test_dataset = KGQADataset(test_qa, medical_kg, tokenizer, config.kg_emb_dim, use_kg=config.use_kg)
     
-    # Create dataloaders
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=collate_fn)
-    test_loader = DataLoader(test_dataset, batch_size=config.batch_size, shuffle=False, collate_fn=collate_fn)
+    # Create dataloaders with memory-efficient settings
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=config.batch_size, 
+        shuffle=True, 
+        collate_fn=collate_fn,
+        pin_memory=False,  # Disable pin_memory to save GPU memory
+        num_workers=0,  # Use 0 workers to avoid memory issues
+        persistent_workers=False
+    )
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=config.batch_size, 
+        shuffle=False, 
+        collate_fn=collate_fn,
+        pin_memory=False,
+        num_workers=0,
+        persistent_workers=False
+    )
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=config.batch_size, 
+        shuffle=False, 
+        collate_fn=collate_fn,
+        pin_memory=False,
+        num_workers=0,
+        persistent_workers=False
+    )
     
     print(f'Train samples: {len(train_dataset):,}')
     print(f'Val samples:   {len(val_dataset):,}')
@@ -186,15 +210,9 @@ def main(mode='train', use_kg=None):
         except Exception as e:
             print(f'Warning: Visualization failed ({e})')
         
-        # Save final model (only if use_kg = True)
+        # Note: Best model is already saved during training (in train_model function)
         if config.use_kg:
-            torch.save({
-                'model_state_dict': model.state_dict(),
-                'tokenizer': tokenizer,
-                'config': config,
-                'history': history
-            }, config.final_model_path)
-            print(f'\n✓ Final model saved to {config.final_model_path}')
+            print(f'\n✓ Training completed! Best model saved to {config.best_model_path}')
         else:
             print(f'\n✓ Training completed! [Model not saved: use_kg=False]')
         
@@ -232,8 +250,20 @@ def main(mode='train', use_kg=None):
                 print(f'\nERROR: Model file not found: {config.best_model_path}')
                 print('Please run training mode first (mode="train")')
                 return
-            checkpoint = torch.load(config.best_model_path, map_location=config.device, weights_only=False)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Load checkpoint on CPU first to save GPU memory
+            print(f'Loading checkpoint from {config.best_model_path}...')
+            checkpoint = torch.load(config.best_model_path, map_location='cpu', weights_only=False)
+            
+            # Load only model weights (skip optimizer state dict to save memory)
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            
+            # Clear checkpoint from CPU memory
+            del checkpoint
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Move model to GPU after loading
             model = model.to(config.device)
             model.eval()
             print(f'✓ Loaded model from {config.best_model_path}')
@@ -380,9 +410,22 @@ def main(mode='train', use_kg=None):
                 print(f'\nERROR: Model file not found: {config.best_model_path}')
                 print('Please run training mode first (mode="train")')
                 return
-            checkpoint = torch.load(config.best_model_path, map_location=config.device, weights_only=False)
-            model.load_state_dict(checkpoint['model_state_dict'])
+            
+            # Load checkpoint on CPU first to save GPU memory
+            print(f'Loading checkpoint from {config.best_model_path}...')
+            checkpoint = torch.load(config.best_model_path, map_location='cpu', weights_only=False)
+            
+            # Load only model weights (skip optimizer state dict to save memory)
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+            
+            # Clear checkpoint from CPU memory
+            del checkpoint
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            
+            # Move model to GPU after loading
             model = model.to(config.device)
+            model.eval()
             print(f'✓ Loaded model from {config.best_model_path}')
         else:
             # If use_kg = False, model should be trained in the same session

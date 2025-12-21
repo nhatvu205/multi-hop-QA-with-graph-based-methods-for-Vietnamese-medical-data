@@ -14,7 +14,7 @@ class ViT5Tokenizer:
     def __init__(
         self, 
         model_name='VietAI/vit5-base',
-        max_len=128,
+        max_len=512,
         use_vncorenlp=False,  # Not used for ViT5, kept for compatibility
         vncorenlp_path=None   # Not used for ViT5, kept for compatibility
     ):

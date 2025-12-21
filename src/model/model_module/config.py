@@ -22,8 +22,7 @@ class Config:
         
         # Tokenizer settings
         self.tokenizer_type = 'vit5'  # Using ViT5 tokenizer
-        self.vocab_size = None  # Will be auto-detected from ViT5 tokenizer
-        self.max_seq_len = 512
+        self.vocab_size = None
         
         # ViT5 Tokenizer settings
         self.vit5_tokenizer_model = 'VietAI/vit5-base'  # ViT5 tokenizer model name
@@ -44,16 +43,23 @@ class Config:
         self.num_decoder_layers = 12  # ViT5-base decoder layers (will be auto-detected)
         self.d_ff = 3072  # ViT5-base d_ff (will be auto-detected)
         self.gnn_hidden = 256
-        self.gnn_type = 'gat'  # 'gcn', 'gat', or 'sage'
+        self.gnn_type = 'gcn'  # 'gcn', 'gat', or 'sage'
         self.gnn_layers = 2
         self.dropout = 0.1
         
         # Training settings
-        self.batch_size = 8
+        self.batch_size = 2  # Further reduced for max_seq_len=512
+        self.gradient_accumulation_steps = 2  # Effective batch size = 2 * 2 = 4
         self.num_epochs = 5
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
         self.grad_clip_norm = 1.0
+        self.max_seq_len = 384  # Keep at 512 for optimal output
+        
+        # Memory optimization settings
+        self.use_mixed_precision = True  # Use FP16/BF16 to reduce memory by ~50%
+        self.use_gradient_checkpointing = True  # Trade compute for memory
+        self.clear_cache_every_n_batches = 5  # Clear GPU cache more frequently
         
         # Data split
         self.train_ratio = 0.8

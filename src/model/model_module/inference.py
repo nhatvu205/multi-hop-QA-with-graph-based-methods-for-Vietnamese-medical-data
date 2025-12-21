@@ -68,6 +68,10 @@ def generate_answer(model, question, context, entities, kg, tokenizer, device,
     # ViT5 generate includes decoder_start_token_id, so we decode directly
     generated_text = tokenizer.decode(generated_ids[0].cpu().numpy())
     
+    # Clear GPU cache after generation
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    
     return generated_text
 
 
