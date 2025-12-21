@@ -44,13 +44,13 @@ class Config:
         self.num_decoder_layers = 12  # ViT5-base decoder layers (will be auto-detected)
         self.d_ff = 3072  # ViT5-base d_ff (will be auto-detected)
         self.gnn_hidden = 256
-        self.gnn_type = 'gcn'  # 'gcn', 'gat', or 'sage'
+        self.gnn_type = 'gat'  # 'gcn', 'gat', or 'sage'
         self.gnn_layers = 2
         self.dropout = 0.1
         
         # Training settings
         self.batch_size = 8
-        self.num_epochs = 6
+        self.num_epochs = 5
         self.learning_rate = 1e-4
         self.weight_decay = 0.01
         self.grad_clip_norm = 1.0
@@ -75,7 +75,7 @@ class Config:
         self.bertscore_model = 'xlm-roberta-base'  # XLM-RoBERTa (good for Vietnamese)
         self.bertscore_rescale = True  # Note: Vietnamese baseline not available, will use raw scores
         self.eval_samples_per_epoch = None  # Evaluate on full val set (None = all)
-        self.compute_qa_metrics_every_n_epochs = 3  # Compute BLEU/ROUGE/BERTScore every N epochs
+        self.compute_qa_metrics_every_n_epochs = 1  # Compute BLEU/ROUGE/BERTScore every N epochs
         
         # Random seed
         self.seed = 42
