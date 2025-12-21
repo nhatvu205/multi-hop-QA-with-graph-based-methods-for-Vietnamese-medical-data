@@ -208,9 +208,6 @@ def bert_score(predictions, ground_truths, model_type='xlm-roberta-base', rescal
         return {'precision': 0.0, 'recall': 0.0, 'f1': 0.0}
     
     try:
-        # IMPORTANT: Vietnamese ('vi') KHÔNG có baseline file trong bert-score library
-        # Baseline chỉ có cho: en, zh, tr, de, ru, fr, ar, es, it, ja, ko, nl, pl, pt
-        # Xem: https://github.com/Tiiiger/bert_score/tree/master/bert_score/rescale_baseline
         
         # Solution: Không dùng lang='vi' và tắt rescaling
         if rescale_with_baseline:
