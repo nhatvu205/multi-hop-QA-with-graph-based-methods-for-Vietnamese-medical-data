@@ -1,7 +1,9 @@
 """Data loading utilities for Knowledge Graph and QA dataset"""
 
-import pandas as pd
+import sys
 import ast
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 
