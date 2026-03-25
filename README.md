@@ -15,7 +15,6 @@ Our methodology for building the Vietnamese medical multi-hop Question Answering
 ```text
 ├── Báo cáo/                      # Contains the project report (PDF) and related documents
 ├── data_exploration/             # Initial Exploratory Data Analysis (EDA)
-├── data_with_entities/           # Data processed through Named Entity Recognition (NER)
 ├── entity-canonicalization/      # Medical entity canonicalization module (mapping variants to standard entities)
 ├── relations_extraction/         # Relation Extraction to create triplets
 │   ├── data/
