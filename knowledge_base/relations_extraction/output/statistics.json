@@ -1,0 +1,15 @@
+{
+  "total_relations": 176158,
+  "relation_type_counts": {
+    "DIAGNOSED_BY": 23547,
+    "PREVENTED_BY": 13457,
+    "TREATED_BY": 44863,
+    "HAS_SYMPTOM": 61091,
+    "RELIES_ON": 17371,
+    "AFFECTS": 9648,
+    "LOCATED_IN": 6181
+  },
+  "avg_confidence": 0.9962097881003499,
+  "unique_head_entities": 5708,
+  "unique_tail_entities": 5892
+}
